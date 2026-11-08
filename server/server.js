@@ -10,11 +10,11 @@ const http = require('http'), crypto = require('crypto');
 const PORT = +process.env.PORT || 8080;
 const MAX_PER_ROOM = +process.env.MAX_PER_ROOM || 50;
 const MAX_ROOMS = +process.env.MAX_ROOMS || 1;
-const TICK_MS = +process.env.TICK_MS || 200;
+const TICK_MS = +process.env.TICK_MS || 100;
 const AOI_R = +process.env.AOI_R || 120;          // bán kính quan tâm (đơn vị game)
 const AOI_MAX = +process.env.AOI_MAX || 24;       // tối đa số người gửi cho mỗi client mỗi nhịp
 const MAX_MSG = 512;                              // byte
-const MAX_RATE = 12;                              // gói/giây/client
+const MAX_RATE = 25;                              // gói/giây/client
 const IDLE_MS = 45000;
 const ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 
@@ -80,7 +80,7 @@ server.on('upgrade', (req, sock) => {
   const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   sock.setNoDelay(true);
-  const c = { id: nextId++, sock, buf: Buffer.alloc(0), room: null, n: 'Du khách', s: 0, x: 0, z: 0, yaw: 0, sp: 0, em: null, bk: 0, seq: 0, seen: new Map(), alive: Date.now(), win: 0, cnt: 0, hello: false, gone: false };
+  const c = { id: nextId++, sock, buf: Buffer.alloc(0), room: null, n: 'Du khách', s: 0, x: 0, z: 0, yaw: 0, sp: 0, em: null, bk: 0, jy: 0, seq: 0, seen: new Map(), alive: Date.now(), win: 0, cnt: 0, hello: false, gone: false };
   sock.on('data', d => {
     c.buf = Buffer.concat([c.buf, d]); if (c.buf.length > 4 * MAX_MSG) return drop(c);
     const msgs = parseFrames(c); if (msgs === null) return drop(c);
@@ -106,7 +106,7 @@ function handle(c, text) {
   if (!c.room) return;
   if (m.t === 'p') {
     c.x = num(m.x, -1e4, 1e4); c.z = num(m.z, -1e4, 1e4); c.yaw = num(m.yaw, -20, 20);
-    c.sp = num(m.sp, 0, 40); c.em = m.em === 'wave' || m.em === 'sit' || m.em === 'dance' ? m.em : null; c.bk = m.bk ? 1 : 0;
+    c.sp = num(m.sp, 0, 40); c.em = m.em === 'wave' || m.em === 'sit' || m.em === 'dance' ? m.em : null; c.bk = m.bk ? 1 : 0; c.jy = num(m.jy, 0, 6);
     c.seq = ++seqCounter;
   }
 }
@@ -127,7 +127,7 @@ setInterval(() => {
       if (exits.length) send(c, { t: 'x', a: exits });
       if (!near.length) return;
       near.sort((a, b) => a[0] - b[0]);
-      const list = near.slice(0, AOI_MAX).map(([, o]) => { c.seen.set(o.id, o.seq); return [o.id, +o.x.toFixed(2), +o.z.toFixed(2), +o.yaw.toFixed(2), +o.sp.toFixed(1), o.em, o.bk]; });
+      const list = near.slice(0, AOI_MAX).map(([, o]) => { c.seen.set(o.id, o.seq); return [o.id, +o.x.toFixed(2), +o.z.toFixed(2), +o.yaw.toFixed(2), +o.sp.toFixed(1), o.em, o.bk, +o.jy.toFixed(2)]; });
       send(c, { t: 'u', a: list });
     });
   }
