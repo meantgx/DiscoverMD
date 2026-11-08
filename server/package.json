@@ -1,0 +1,9 @@
+{
+  "name": "mangden-multiplayer",
+  "version": "1.0.0",
+  "description": "Máy chủ đa người chơi nhẹ cho game 3D Măng Đen (50 người/phòng, hết chỗ thì client chơi một mình cùng bot)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "loadtest": "PORT=8099 node server.js & sleep 1 && node loadtest.js; kill %1" },
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED"
+}
