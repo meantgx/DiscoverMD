@@ -9,6 +9,7 @@
 const http = require('http'), crypto = require('crypto');
 const PORT = +process.env.PORT || 8080;
 const MAX_PER_ROOM = +process.env.MAX_PER_ROOM || 50;
+const EMOTES = ['wave', 'sit', 'dance', 'like', 'love', 'haha', 'wow', 'sad', 'angry'];
 const MAX_ROOMS = +process.env.MAX_ROOMS || 1;
 const TICK_MS = +process.env.TICK_MS || 100;
 const AOI_R = +process.env.AOI_R || 120;          // bán kính quan tâm (đơn vị game)
@@ -106,7 +107,7 @@ function handle(c, text) {
   if (!c.room) return;
   if (m.t === 'p') {
     c.x = num(m.x, -1e4, 1e4); c.z = num(m.z, -1e4, 1e4); c.yaw = num(m.yaw, -20, 20);
-    c.sp = num(m.sp, 0, 40); c.em = m.em === 'wave' || m.em === 'sit' || m.em === 'dance' ? m.em : null; c.bk = m.bk ? 1 : 0; c.jy = num(m.jy, 0, 6);
+    c.sp = num(m.sp, 0, 40); c.em = EMOTES.includes(m.em) ? m.em : null; c.bk = m.bk ? 1 : 0; c.jy = num(m.jy, 0, 6);
     c.seq = ++seqCounter;
   }
 }
