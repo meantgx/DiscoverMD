@@ -24,6 +24,35 @@ const rooms = [];                                 // mỗi phần tử: Map(id -
 const clean = (s, n) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f<>]/g, '').slice(0, n);
 const num = (v, lo, hi) => { v = +v; return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : 0; };
 
+// ---------- IP -> tỉnh/thành (gần đúng), chỉ để admin xem; giữ trong bộ nhớ khi người chơi còn online ----------
+const geoCache = new Map();                        // ip -> { v, t }
+const isPrivate = ip => !ip || /^(::1|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|fc|fd|::ffff:(127|10|192\.168)\.)/i.test(ip);
+async function geoLookup(ip) {
+  if (isPrivate(ip)) return 'Mạng nội bộ';
+  const hit = geoCache.get(ip); if (hit && Date.now() - hit.t < 6 * 3600e3) return hit.v;
+  let v = '';
+  try {
+    const r = await fetch('https://ipwho.is/' + encodeURIComponent(ip) + '?fields=success,country,region,city', { signal: AbortSignal.timeout(3500) });
+    const j = await r.json();
+    if (j && j.success !== false) v = [j.region || j.city, j.country].filter(Boolean).join(', ');
+  } catch (e) {}
+  if (!v) {
+    try {
+      const r = await fetch('https://ipapi.co/' + encodeURIComponent(ip) + '/json/', { signal: AbortSignal.timeout(3500) });
+      const j = await r.json();
+      if (j && !j.error) v = [j.region || j.city, j.country_name].filter(Boolean).join(', ');
+    } catch (e) {}
+  }
+  v = clean(v, 60) || 'Không xác định';
+  if (geoCache.size > 2000) geoCache.clear();
+  geoCache.set(ip, { v, t: Date.now() });
+  return v;
+}
+const ipOf = req => {
+  const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return clean(xf || req.socket.remoteAddress || '', 64).replace(/^::ffff:/, '');
+};
+
 // ---------- WebSocket tối giản (RFC 6455) ----------
 function frame(str) {
   const p = Buffer.from(str), n = p.length;
@@ -81,7 +110,7 @@ server.on('upgrade', (req, sock) => {
   const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   sock.setNoDelay(true);
-  const c = { id: nextId++, sock, buf: Buffer.alloc(0), room: null, n: 'Du khách', s: 0, x: 0, z: 0, yaw: 0, sp: 0, em: null, bk: 0, bt: 0, jy: 0, seq: 0, seen: new Map(), alive: Date.now(), win: 0, cnt: 0, hello: false, gone: false };
+  const c = { id: nextId++, ip: ipOf(req), geo: '…', t0: Date.now(), sock, buf: Buffer.alloc(0), room: null, n: 'Du khách', s: 0, x: 0, z: 0, yaw: 0, sp: 0, em: null, bk: 0, bt: 0, jy: 0, seq: 0, seen: new Map(), alive: Date.now(), win: 0, cnt: 0, hello: false, gone: false };
   sock.on('data', d => {
     c.buf = Buffer.concat([c.buf, d]); if (c.buf.length > 4 * MAX_MSG) return drop(c);
     const msgs = parseFrames(c); if (msgs === null) return drop(c);
@@ -97,7 +126,7 @@ function handle(c, text) {
   let m; try { m = JSON.parse(text); } catch (e) { return; }
   if (!m || typeof m !== 'object') return;
   if (m.t === 'hello' && !c.hello) {
-    c.hello = true; c.n = clean(m.n, 24) || 'Du khách'; c.s = num(m.s, 0, 31) | 0;
+    c.hello = true; geoLookup(c.ip).then(g => { c.geo = g; }); c.n = clean(m.n, 24) || 'Du khách'; c.s = num(m.s, 0, 31) | 0;
     c.x = num(m.x, -1e4, 1e4); c.z = num(m.z, -1e4, 1e4);
     if (!placeInRoom(c)) { send(c, { t: 'full', cap: MAX_PER_ROOM * MAX_ROOMS }); c.gone = true; setTimeout(() => c.sock.destroy(), 200); return; }
     send(c, { t: 'w', id: c.id, n: c.room.size, cap: MAX_PER_ROOM, r: roster(c) });
@@ -110,6 +139,14 @@ function handle(c, text) {
     const key = process.env.ADMIN_KEY || '1587397561';   // nên đặt biến môi trường ADMIN_KEY trên Render để đổi mật khẩu mà không sửa code
     if (!key) { send(c, { t: 'adm', ok: 0, e: 'nokey' }); return; }
     if (typeof m.k !== 'string' || m.k !== key) { c.admFail = (c.admFail || 0) + 1; send(c, { t: 'adm', ok: 0, e: 'bad' }); return; }
+    if (m.a === 'list') {   // danh sách người chơi đang online (kèm IP, tỉnh/thành gần đúng, vị trí)
+      const a = []; for (const r of rooms) r.forEach(o => { if (o.hello) a.push([o.id, o.n, o.ip, o.geo, +o.x.toFixed(1), +o.z.toFixed(1), Math.round((Date.now() - o.t0) / 1000), o === c ? 1 : 0]); });
+      send(c, { t: 'pl', a }); return;
+    }
+    if (m.a === 'where') {   // vị trí mới nhất của một người chơi để admin dịch chuyển tới
+      let f = null; for (const r of rooms) { const o = r.get(+m.id); if (o && o.hello) f = o; }
+      send(c, f ? { t: 'tp', id: f.id, n: f.n, x: +f.x.toFixed(2), z: +f.z.toFixed(2) } : { t: 'tp', id: +m.id, gone: 1 }); return;
+    }
     const txt = clean(m.m, 160);
     if (!txt) { send(c, { t: 'adm', ok: 1, chk: 1 }); return; }   // chỉ kiểm tra mật khẩu khi mở quyền admin
     for (const r of rooms) r.forEach(o => { if (o.hello) send(o, { t: 'ann', m: txt }); });
