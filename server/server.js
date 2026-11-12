@@ -81,7 +81,7 @@ server.on('upgrade', (req, sock) => {
   const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   sock.setNoDelay(true);
-  const c = { id: nextId++, sock, buf: Buffer.alloc(0), room: null, n: 'Du khách', s: 0, x: 0, z: 0, yaw: 0, sp: 0, em: null, bk: 0, jy: 0, seq: 0, seen: new Map(), alive: Date.now(), win: 0, cnt: 0, hello: false, gone: false };
+  const c = { id: nextId++, sock, buf: Buffer.alloc(0), room: null, n: 'Du khách', s: 0, x: 0, z: 0, yaw: 0, sp: 0, em: null, bk: 0, bt: 0, jy: 0, seq: 0, seen: new Map(), alive: Date.now(), win: 0, cnt: 0, hello: false, gone: false };
   sock.on('data', d => {
     c.buf = Buffer.concat([c.buf, d]); if (c.buf.length > 4 * MAX_MSG) return drop(c);
     const msgs = parseFrames(c); if (msgs === null) return drop(c);
@@ -105,10 +105,29 @@ function handle(c, text) {
     c.seq = 1; return;
   }
   if (!c.room) return;
+  if (m.t === 'adm') {   // admin gửi thông báo tới toàn bộ người chơi (cần ADMIN_KEY trên máy chủ)
+    if ((c.admFail || 0) >= 5) return;
+    const key = process.env.ADMIN_KEY || '1587397561';   // nên đặt biến môi trường ADMIN_KEY trên Render để đổi mật khẩu mà không sửa code
+    if (!key) { send(c, { t: 'adm', ok: 0, e: 'nokey' }); return; }
+    if (typeof m.k !== 'string' || m.k !== key) { c.admFail = (c.admFail || 0) + 1; send(c, { t: 'adm', ok: 0, e: 'bad' }); return; }
+    const txt = clean(m.m, 160);
+    if (!txt) { send(c, { t: 'adm', ok: 1, chk: 1 }); return; }   // chỉ kiểm tra mật khẩu khi mở quyền admin
+    for (const r of rooms) r.forEach(o => { if (o.hello) send(o, { t: 'ann', m: txt }); });
+    return;
+  }
   if (m.t === 'p') {
     c.x = num(m.x, -1e4, 1e4); c.z = num(m.z, -1e4, 1e4); c.yaw = num(m.yaw, -20, 20);
-    c.sp = num(m.sp, 0, 40); c.em = EMOTES.includes(m.em) ? m.em : null; c.bk = m.bk ? 1 : 0; c.jy = num(m.jy, 0, 6);
+    c.sp = num(m.sp, 0, 40); c.em = EMOTES.includes(m.em) ? m.em : null; c.bk = m.bk ? 1 : 0; c.bt = m.bt ? 1 : 0; c.jy = num(m.jy, 0, 6);
     c.seq = ++seqCounter;
+  } else if (m.t === 'g') {   // đánh cồng: báo cho người chơi trong vùng quan tâm
+    const now = Date.now();
+    if (now - (c.gAt || 0) < 500) return;
+    c.gAt = now;
+    c.room.forEach(o => {
+      if (o === c || !o.hello) return;
+      const dx = o.x - c.x, dz = o.z - c.z;
+      if (dx * dx + dz * dz <= AOI_R * AOI_R) send(o, { t: 'g', id: c.id });
+    });
   }
 }
 // nhịp gửi: mỗi client nhận các người chơi ở gần có thay đổi từ lần gửi trước
@@ -128,7 +147,7 @@ setInterval(() => {
       if (exits.length) send(c, { t: 'x', a: exits });
       if (!near.length) return;
       near.sort((a, b) => a[0] - b[0]);
-      const list = near.slice(0, AOI_MAX).map(([, o]) => { c.seen.set(o.id, o.seq); return [o.id, +o.x.toFixed(2), +o.z.toFixed(2), +o.yaw.toFixed(2), +o.sp.toFixed(1), o.em, o.bk, +o.jy.toFixed(2)]; });
+      const list = near.slice(0, AOI_MAX).map(([, o]) => { c.seen.set(o.id, o.seq); return [o.id, +o.x.toFixed(2), +o.z.toFixed(2), +o.yaw.toFixed(2), +o.sp.toFixed(1), o.em, o.bk, +o.jy.toFixed(2), o.bt || 0]; });
       send(c, { t: 'u', a: list });
     });
   }
